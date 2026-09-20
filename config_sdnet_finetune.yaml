@@ -57,6 +57,15 @@ seed: 42
 device: auto
 output_dir: runs_ft
 
+# ---------------- batch augmentation / class imbalance (all off by default) ----------------
+mixup_alpha: 0.0               # >0 enables MixUp (Beta(a, a)); 0.2 is a common start
+cutmix_alpha: 0.0              # >0 enables CutMix (Beta(a, a)); 1.0 is the standard value
+mixup_prob: 1.0                # probability a batch is mixed at all
+mixup_switch_prob: 0.5         # when both are on: probability of CutMix (else MixUp)
+imbalance: "off"               # off | oversample (balanced sampling) | smote (SMOTE-style minority synthesis)
+smote_target: 0.5              # smote: fraction of each batch that should be cracked
+smote_bank: 256                # smote: how many recent cracked images are kept for interpolation
+
 monitor: val_auc
 early_stop_patience: 8
 early_stop_min_delta: 0.0005
@@ -65,7 +74,7 @@ restore_best: true
 threshold_beta: 1.0
 target_recall: 0.95
 bootstrap: 1000
-save_every: 0
+save_every: 1
 resume: null
 summary_only: false
 debug_subset: 0

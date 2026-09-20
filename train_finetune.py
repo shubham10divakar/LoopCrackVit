@@ -41,7 +41,7 @@ from sklearn.metrics import classification_report, confusion_matrix
 import metrics as M
 from data import build_folder_loaders
 from model import CrackViTConfig, LoopedCrackViT
-from train import (EarlyStopping, eta, complexity, cosine_lr, get_args, param_groups, pick_device, seed_all, tqdm)
+from train import (EarlyStopping, sync_after_resume, eta, complexity, cosine_lr, get_args, param_groups, pick_device, seed_all, tqdm)
 
 
 # ------------------------------------------------------------------ mixup / cutmix
@@ -172,7 +172,9 @@ def main():
     cols = (["epoch", "lr", "train_loss", "train_acc", "val_loss", "val_acc", "val_top5", "val_f1_macro", "val_bal_acc"]
             + [f"val_acc_{e}" for e in exit_names[:-1]] + ["sec"])
     log_path = os.path.join(out, "log.csv")
-    if not (args.resume and os.path.exists(log_path)):
+    if args.resume:
+        sync_after_resume(out, es, start_epoch - 1, args.resume, history, log_path, cols)
+    else:
         with open(log_path, "w", newline="") as f:
             csv.writer(f).writerow(cols)
     print(f"\nmonitor={args.monitor} patience={args.early_stop_patience} | layer_decay={args.layer_decay} | "

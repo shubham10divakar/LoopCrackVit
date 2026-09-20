@@ -30,6 +30,7 @@ Detailed guides: **[docs/SDNET.md](docs/SDNET.md)** (crack problem: data, metric
 | `pretrained.py` | maps a timm ViT (DeiT-S …) into the looped blocks (`avg` = Relaxed-Recursive style, `pick`) |
 | `data.py` | SDNET pipeline (leak-free group split) and the multi-class image-folder pipeline |
 | `metrics.py` | binary crack metrics, bootstrap CIs, threshold tuning, multi-class metrics, early-exit tables |
+| `augment.py` | batch-level CutMix, MixUp and SMOTE-style minority synthesis for the SDNET trainer |
 | `train.py` | **SDNET2018** training / fine-tuning + full evaluation |
 | `train_finetune.py` | **multi-class benchmarks** training / fine-tuning + full evaluation |
 | `downloads.py` | downloads and prepares CUB-200, Aircraft, Flowers-102, Food-101, CIFAR-100, PlantDoc, … |
@@ -88,6 +89,40 @@ and `python train_finetune.py --dataset-dir datasets/cifar100 --class-subset 10 
 
 ---
 
+## Reproduce the Kaggle notebook runs on this desktop
+
+The notebook cells (`loopedcrackvit.ipynb`) train from scratch with Adam, ReduceLROnPlateau, a random patch-level
+split, batch 16, 60 epochs, and early stopping on `val_final_auc` (patience 10). This command matches that setup:
+
+```powershell
+# STACK 6x2, GIPA_FULL (the "STACK LOOP" cell)
+python train.py --split-mode random --scheduler plateau --weight-decay 0 --grad-clip 0 --early-stop-min-delta 0 --early-stop-patience 10 --monitor val_auc --lr 0.0003 --batch-size 16 --epochs 60
+
+# SANDWICH 1 + 4x2 + 1 (the "SANDWICH LOOP" cell): same flags plus
+python train.py --split-mode random --scheduler plateau --weight-decay 0 --grad-clip 0 --early-stop-min-delta 0 --early-stop-patience 10 --monitor val_auc --lr 0.0003 --batch-size 16 --epochs 60 --n-prelude 1 --n-core 4 --n-coda 1
+```
+
+Output goes to `runs/gipa_full_0-6x2-0_conv_bs16_random_s42/` (sandwich: `gipa_full_1-4x2-1_conv_bs16_random_s42/`).
+
+| flag | matches in the notebook |
+|---|---|
+| `--split-mode random` | patch-level `train_test_split` 70/15/15, seed 42 (the default `group` split avoids leakage; use it for the paper) |
+| `--scheduler plateau` | `ReduceLROnPlateau(factor 0.5, patience 4, min_lr 1e-6)` on the validation loss |
+| `--weight-decay 0 --grad-clip 0` | plain Adam, no gradient clipping |
+| `--early-stop-patience 10 --early-stop-min-delta 0 --monitor val_auc` | `EarlyStopping` on `val_final_auc`, patience 10 |
+| `--lr 0.0003 --batch-size 16 --epochs 60` | `LR_INIT`, `BATCH_SIZE`, `EPOCHS` |
+
+Model defaults in `config.yaml` already match the notebook (GIPA_FULL, conv stem, dim 256, 8 heads, MLP ratio 2.0,
+dropout 0.1, pass embedding and per-pass gates on, aux weight 0.3, label smoothing 0.05, balanced class weights).
+
+Expect small differences from the Kaggle numbers: the split uses the same sklearn calls and seed but a differently
+ordered file list, so the exact images differ; augmentation is torchvision (rotations and shifts fill with black
+instead of Keras "nearest", inputs normalised to −1..1 instead of 0..1); initialisation and random streams differ.
+The Kaggle log shows about 9 minutes per epoch on a T4, and this GPU should be similar, so a full 60-epoch run can
+take up to about 9 hours unless early stopping ends it sooner.
+
+---
+
 ## Model variants (all flags of `model.py`)
 
 | flag | default | meaning |
@@ -114,11 +149,96 @@ GIPA adds `lam_c, lam_a, lam_i, gamma, kappa` gates (init 0.01, so a pretrained 
 | `--monitor` | `val_auc` (SDNET) / `val_acc` (benchmarks) | metric on the **validation split, final exit**. SDNET: `val_auc val_ap val_f1 val_f2 val_mcc val_bal_acc val_recall val_loss`; benchmarks: `val_acc val_top5 val_f1_macro val_bal_acc val_loss` |
 | `--early-stop-patience` | 10 / 8 / 15 | stop after N epochs without improvement (`null` = never) |
 | `--early-stop-min-delta` | 0.0005 / 0 | minimum improvement that counts |
-| `--save-every N` | 0 | also keep numbered checkpoints `epoch_NNNN.pt` |
-| `--resume runs/<run>/last.pt` | – | restores model, optimizer, AMP scaler, scheduler, early-stop counter and history |
+| `--save-every N` | **1** | keep a numbered checkpoint `epoch_NNNN.pt` every N epochs (1 = every epoch, 0 = only `best.pt` / `last.pt`) |
+| `--resume <checkpoint>` | – | restores model, optimizer, AMP scaler, scheduler, early-stop counter and history |
 
 `best.pt` (best monitored epoch) is always the model used for the final test evaluation; the test set is never
 used for early stopping, model selection or threshold tuning.
+
+### Resume from any epoch
+
+Every epoch is saved by default, so you can restart training from whichever epoch you want:
+
+```powershell
+# what is there?
+dir runs_ft\gipa_full_0-6x2-0_ft-avg_bs32_group_s42\epoch_*.pt
+
+# continue from epoch 12 (SDNET; benchmarks work the same with train_finetune.py)
+python train.py --config config_sdnet_finetune.yaml --resume runs_ft/gipa_full_0-6x2-0_ft-avg_bs32_group_s42/epoch_0012.pt
+
+# continue from the newest epoch / from the best epoch
+python train.py --config config_sdnet_finetune.yaml --resume runs_ft/gipa_full_0-6x2-0_ft-avg_bs32_group_s42/last.pt
+python train.py --config config_sdnet_finetune.yaml --resume runs_ft/gipa_full_0-6x2-0_ft-avg_bs32_group_s42/best.pt
+```
+
+* Resuming from epoch N continues at epoch N+1 with the same learning-rate schedule position, optimizer state and
+  early-stopping counters. Use exactly the flags of the original run (a changed model config is refused; a changed
+  learning rate or batch size is not caught). To branch with different settings, change `--seed` or an
+  augmentation flag so the run gets a new folder name.
+* Resuming from an older epoch than the newest one is safe: `log.csv` is rewritten from that epoch's history (no
+  duplicated epochs) and `best.pt` is reset to the best epoch within it (copied from `epoch_NNNN.pt`). Epochs after
+  the resume point are overwritten as training proceeds.
+* `--epochs` must be larger than the epoch you resume from, otherwise it goes straight to the final test evaluation.
+* **Disk:** each checkpoint holds the weights and the Adam state. Measured 45 MB per epoch for the from-scratch
+  SDNET model (3.9M parameters); the DeiT-S-sized fine-tune models (about 11M parameters) come to roughly 3× that
+  (an estimate from parameter count, not measured), i.e. a few GB per 50-epoch run. Use `--save-every 5` (or 0)
+  to save less.
+* Not restored: the random-number state, so a resumed run is not bit-identical to an uninterrupted one.
+
+---
+
+## Batch augmentation and class imbalance (SDNET trainer)
+
+CutMix, MixUp and two imbalance options are flags of `train.py`. All are **off by default**, so existing commands
+behave as before. They apply to training batches only; validation and test images are never mixed.
+
+| flag | default | meaning |
+|---|---|---|
+| `--cutmix-alpha A` | 0 (off) | CutMix: paste a random box from another image, label weighted by box area. `1.0` is the standard value |
+| `--mixup-alpha A` | 0 (off) | MixUp: blend two images and their labels. `0.2` is a common start |
+| `--mixup-prob P` | 1.0 | probability that a batch is mixed at all |
+| `--mixup-switch-prob P` | 0.5 | when both are on: probability of using CutMix (otherwise MixUp) |
+| `--imbalance off\|oversample\|smote` | `off` | see below |
+| `--smote-target F` | 0.5 | `smote`: fraction of each batch that should be cracked after synthesis |
+| `--smote-bank N` | 256 | `smote`: how many recent cracked images are kept to interpolate between |
+
+* `oversample` draws images with probability inversely proportional to their class size, so batches are about 50 %
+  cracked (some cracked images repeat within an epoch).
+* `smote` is **SMOTE-style, in pixel space**. Classic SMOTE interpolates between a minority sample and one of its
+  nearest neighbours in feature space; on raw 224×224×3 images that is impractical, so this blends two random
+  cracked images from the rolling bank (hard label 1) and appends the synthetic images to the batch until the
+  cracked fraction reaches `--smote-target`. At most half a batch is added (a batch can grow to 1.5× the size, so
+  memory rises accordingly).
+* With `oversample` or `smote` the loss class weights are switched off automatically (a note is printed), since
+  the classes are already rebalanced; use `--class-weights false` yourself if you combine them with something else.
+* Runs get a tag in the folder name (`..._cut1_mix0.2_smote_s42`) so they do not overwrite each other.
+* Caveat for cracks: CutMix labels follow box *area*, but a hairline crack covers few pixels, so a pasted box can
+  remove the crack while the label still says "partly cracked". Treat both as regularisers to be judged on the
+  validation split, not as guaranteed improvements; run them as ablations against the plain baseline.
+
+```powershell
+# fine-tune with CutMix (+ a little MixUp)
+python train.py --config config_sdnet_finetune.yaml --cutmix-alpha 1.0 --mixup-alpha 0.2
+
+# CutMix only
+python train.py --config config_sdnet_finetune.yaml --cutmix-alpha 1.0
+
+# SMOTE-style minority synthesis (50 % cracked per batch)
+python train.py --config config_sdnet_finetune.yaml --imbalance smote
+
+# balanced sampling instead
+python train.py --config config_sdnet_finetune.yaml --imbalance oversample
+
+# everything together
+python train.py --config config_sdnet_finetune.yaml --cutmix-alpha 1.0 --mixup-alpha 0.2 --imbalance smote --smote-target 0.5
+
+# from scratch (config.yaml) works the same way
+python train.py --cutmix-alpha 1.0 --imbalance oversample
+```
+
+The multi-class benchmark trainer (`train_finetune.py`) already has `--mixup-alpha`, `--cutmix-alpha`, `--mixup-prob`
+and `--mixup-switch-prob` (on by default in `config_finetune.yaml`); it has no SMOTE or oversampling option since the
+benchmark datasets are roughly balanced.
 
 ---
 

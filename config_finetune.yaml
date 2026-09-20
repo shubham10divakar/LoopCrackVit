@@ -70,6 +70,6 @@ early_stop_patience: 15
 early_stop_min_delta: 0.0
 
 bootstrap: 1000
-save_every: 0
+save_every: 1
 resume: null
 summary_only: false

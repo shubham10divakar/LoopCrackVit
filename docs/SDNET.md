@@ -111,3 +111,14 @@ Ten thousand-ish cracked patches is small for a ViT, and published numbers are a
 backbones. `config_sdnet_finetune.yaml` initialises the six shared blocks from DeiT-S (layers *i* and *i+6*
 averaged), uses ImageNet normalisation, layer-wise LR decay 0.75 and drop-path 0.1. See
 [BENCHMARKS.md](BENCHMARKS.md) for how the mapping works and which baselines to run alongside it.
+
+## CutMix, MixUp, SMOTE-style oversampling, resuming from any epoch
+
+`--cutmix-alpha`, `--mixup-alpha`, `--imbalance off|oversample|smote` and `--smote-target` are documented in the
+main README ("Batch augmentation and class imbalance"), together with "Resume from any epoch". A checkpoint is now
+saved every epoch by default (`--save-every 1`), so `--resume runs_ft/<run>/epoch_0012.pt` restarts from epoch 12.
+
+```powershell
+python train.py --config config_sdnet_finetune.yaml --cutmix-alpha 1.0 --mixup-alpha 0.2 --imbalance smote
+python train.py --config config_sdnet_finetune.yaml --resume runs_ft/<run>/epoch_0012.pt
+```

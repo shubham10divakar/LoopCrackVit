@@ -43,6 +43,7 @@ except ImportError:
         return it
 
 import metrics as M
+from augment import MinorityBank, mix_batch, smote_batch
 from data import CLASS_NAMES, build_loaders, describe_split, load_split
 from model import CrackViTConfig, LoopedCrackViT
 
@@ -89,8 +90,10 @@ def get_args(default_config="config.yaml"):
 
 def run_name(a):
     init = f"ft-{a.init_strategy}" if a.backbone else a.stem
+    tag = ((f"_cut{a.cutmix_alpha:g}" if a.cutmix_alpha > 0 else "") + (f"_mix{a.mixup_alpha:g}" if a.mixup_alpha > 0 else "")
+           + (f"_{a.imbalance}" if a.imbalance != "off" else ""))
     return (f"{a.attention.lower()}_{a.n_prelude}-{a.n_core}x{a.n_passes}-{a.n_coda}"
-            f"_{init}_bs{a.batch_size * a.grad_accum}_{a.split_mode}_s{a.seed}")
+            f"_{init}_bs{a.batch_size * a.grad_accum}_{a.split_mode}{tag}_s{a.seed}")
 
 
 def pick_device(name):
@@ -139,6 +142,25 @@ class EarlyStopping:
         self.best, self.best_epoch, self.bad = s["best"], s["best_epoch"], s["bad"]
 
 
+def sync_after_resume(out, es, ck_epoch, resume_path, history, log_path, cols):
+    """Make the run folder consistent after resuming from ANY epoch checkpoint.
+    * best.pt is reset to the best epoch within the resumed history (a later, abandoned branch of the
+      same run may have left a different best.pt behind);
+    * log.csv is rewritten from the resumed history, so epochs after the resume point are not duplicated."""
+    import shutil
+    src = resume_path if es.best_epoch == ck_epoch else os.path.join(out, f"epoch_{es.best_epoch:04d}.pt")
+    if os.path.exists(src):
+        shutil.copyfile(src, os.path.join(out, "best.pt"))
+    else:
+        print(f"[warn] {src} not found, so best.pt cannot be re-synced; keep per-epoch checkpoints (--save-every 1) "
+              f"to avoid this")
+    with open(log_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(cols)
+        for h in history:
+            w.writerow([f"{h[c]:.6g}" if isinstance(h[c], float) else h.get(c, "") for c in cols])
+
+
 # ------------------------------------------------------------------ optimisation helpers
 def cosine_lr(step, total, warmup, base, min_lr):
     if step < warmup:
@@ -185,7 +207,7 @@ def param_groups(model, wd, lr=1.0, layer_decay=1.0):
 def multi_exit_loss(outs, y, exit_w, smoothing, sw):
     """Class-weighted, label-smoothed BCE summed over exits (final exit weight 1.0)."""
     t = y * (1 - smoothing) + 0.5 * smoothing
-    w = sw[y.long()]
+    w = sw[0] + (sw[1] - sw[0]) * y          # interpolates the class weight for soft (mixed) targets
     total = 0.0
     for o, ew in zip(outs, exit_w):
         total = total + ew * (F.binary_cross_entropy_with_logits(o.float(), t, reduction="none") * w).mean()
@@ -292,6 +314,12 @@ def complexity(model, device, amp_dtype, use_amp, size):
 # ------------------------------------------------------------------ main
 def main():
     args = get_args()
+    args.imbalance = args.imbalance or "off"
+    if args.imbalance not in ("off", "oversample", "smote"):
+        raise SystemExit("--imbalance must be off | oversample | smote")
+    if args.imbalance != "off" and args.class_weights:
+        print(f"[note] --imbalance {args.imbalance} already rebalances the classes, so loss class weights are turned off")
+        args.class_weights = False
     seed_all(args.seed)
     device = pick_device(args.device)
     torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = True
@@ -326,7 +354,7 @@ def main():
     print(f"\nsplit_mode={args.split_mode}\n{describe_split(df)}")
     train_loader, val_loader, test_loader, (tr_df, va_df, te_df) = build_loaders(
         df, args.image_size, args.batch_size, args.num_workers, args.augment,
-        pin_memory=device.type == "cuda", seed=args.seed,
+        pin_memory=device.type == "cuda", seed=args.seed, oversample=args.imbalance == "oversample",
         norm="imagenet" if (args.norm == "auto" and args.backbone) or args.norm == "imagenet" else "half")
 
     n_pos = int(tr_df["label"].sum()); n_neg = len(tr_df) - n_pos
@@ -334,6 +362,10 @@ def main():
                       device=device)
     print(f"class weights: Non-cracked={cw[0]:.3f}  Cracked={cw[1]:.3f}  (train prevalence {n_pos / len(tr_df):.3f})")
     exit_w = [1.0 if n == "final" else args.aux_weight for n in exit_names]
+    bank = MinorityBank(args.smote_bank) if args.imbalance == "smote" else None
+    print(f"batch augmentation: cutmix_alpha={args.cutmix_alpha} mixup_alpha={args.mixup_alpha} "
+          f"(prob {args.mixup_prob}, cutmix share {args.mixup_switch_prob}) | imbalance={args.imbalance}"
+          + (f" (target {args.smote_target:.0%} cracked per batch)" if bank else ""))
 
     # ---- optim ---------------------------------------------------------------
     opt = torch.optim.AdamW(param_groups(model, args.weight_decay, args.lr, args.layer_decay), lr=args.lr)
@@ -361,7 +393,9 @@ def main():
             "val_ap", "val_f1", "val_f2", "val_precision", "val_recall", "val_mcc"]
     cols += [f"val_{k}_{e}" for e in exit_names[:-1] for k in ("auc", "f1")] + ["sec"]
     log_path = os.path.join(out, "log.csv")
-    if not (args.resume and os.path.exists(log_path)):
+    if args.resume:
+        sync_after_resume(out, es, start_epoch - 1, args.resume, history, log_path, cols)
+    else:
         with open(log_path, "w", newline="") as f:
             csv.writer(f).writerow(cols)
 
@@ -382,6 +416,9 @@ def main():
                 for g in opt.param_groups:
                     g["lr"] = lr * g.get("lr_scale", 1.0)
             x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
+            if bank is not None:
+                x, y = smote_batch(x, y, bank, args.smote_target)
+            x, y = mix_batch(x, y, args.mixup_alpha, args.cutmix_alpha, args.mixup_prob, args.mixup_switch_prob)
             with torch.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
                 outs = model(x)
             loss = multi_exit_loss(outs, y, exit_w, args.label_smoothing, cw)
@@ -394,7 +431,7 @@ def main():
                     torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
                 scaler.step(opt); scaler.update(); opt.zero_grad(set_to_none=True); step += 1
             loss_sum += loss.item() * y.size(0)
-            correct += ((outs[-1] > 0).float() == y).sum().item(); n += y.size(0)
+            correct += ((outs[-1] > 0).float() == (y >= 0.5).float()).sum().item(); n += y.size(0)
             pbar.set_postfix(loss=f"{loss_sum / n:.4f}", acc=f"{correct / n:.4f}", lr=f"{lr:.1e}", gpu=f"{torch.cuda.max_memory_allocated() / 2**30:.1f}G" if device.type == "cuda" else "cpu")
         pbar.close()
 

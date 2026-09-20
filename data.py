@@ -118,11 +118,19 @@ def loader_kw(workers, persistent, pin_memory):
 
 
 def build_loaders(df, image_size, batch_size, num_workers, augment=True, pin_memory=True, seed=42,
-                  norm="half"):
+                  norm="half", oversample=False):
     tr, va, te = (df[df["split"] == s].reset_index(drop=True) for s in ("train", "val", "test"))
+    gen = torch.Generator().manual_seed(seed)
+    if oversample:      # every image drawn with probability ~ 1/(size of its class): batches are ~50% cracked
+        counts = tr["label"].value_counts()
+        wts = torch.tensor(tr["label"].map(lambda c: 1.0 / counts[c]).to_numpy(), dtype=torch.double)
+        sampler = torch.utils.data.WeightedRandomSampler(wts, num_samples=len(tr), replacement=True, generator=gen)
+        order = dict(sampler=sampler)
+    else:
+        order = dict(shuffle=True, generator=gen)
     train_loader = DataLoader(CrackDataset(tr, build_transforms(image_size, augment, norm)),
-                              batch_size=batch_size, shuffle=True, drop_last=True,
-                              generator=torch.Generator().manual_seed(seed), **loader_kw(num_workers, True, pin_memory))
+                              batch_size=batch_size, drop_last=True, **order,
+                              **loader_kw(num_workers, True, pin_memory))
     ev_tf = build_transforms(image_size, False, norm)
     val_loader = DataLoader(CrackDataset(va, ev_tf), batch_size=batch_size * 2, shuffle=False,
                             **loader_kw(min(2, num_workers), True, pin_memory))

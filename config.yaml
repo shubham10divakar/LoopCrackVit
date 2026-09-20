@@ -62,6 +62,15 @@ seed: 42
 device: auto
 output_dir: runs
 
+# ---------------- batch augmentation / class imbalance (all off by default) ----------------
+mixup_alpha: 0.0               # >0 enables MixUp (Beta(a, a)); 0.2 is a common start
+cutmix_alpha: 0.0              # >0 enables CutMix (Beta(a, a)); 1.0 is the standard value
+mixup_prob: 1.0                # probability a batch is mixed at all
+mixup_switch_prob: 0.5         # when both are on: probability of CutMix (else MixUp)
+imbalance: "off"               # off | oversample (balanced sampling) | smote (SMOTE-style minority synthesis)
+smote_target: 0.5              # smote: fraction of each batch that should be cracked
+smote_bank: 256                # smote: how many recent cracked images are kept for interpolation
+
 # ---------------- early stopping ----------------
 # monitor is computed on the FINAL exit of the validation set:
 #   val_auc | val_ap | val_f1 | val_f2 | val_mcc | val_bal_acc | val_recall | val_loss
@@ -74,7 +83,7 @@ restore_best: true             # final evaluation always uses best.pt
 threshold_beta: 1.0            # val-tuned threshold maximises F-beta (2.0 favours recall)
 target_recall: 0.95            # also report the threshold that reaches this crack recall
 bootstrap: 1000                # bootstrap resamples for 95% CIs (0 = skip)
-save_every: 0                  # numbered checkpoints every N epochs (0 = only best/last)
+save_every: 1                  # numbered checkpoint epoch_NNNN.pt every N epochs (1 = every epoch; 0 = only best/last)
 resume: null
 summary_only: false
 debug_subset: 0                # >0: use only N images per split (pipeline smoke test)
