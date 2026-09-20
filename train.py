@@ -158,7 +158,7 @@ def sync_after_resume(out, es, ck_epoch, resume_path, history, log_path, cols):
         w = csv.writer(f)
         w.writerow(cols)
         for h in history:
-            w.writerow([f"{h[c]:.6g}" if isinstance(h[c], float) else h.get(c, "") for c in cols])
+            w.writerow([f"{v:.6g}" if isinstance(v := h.get(c), float) else ("" if v is None else v) for c in cols])
 
 
 # ------------------------------------------------------------------ optimisation helpers
@@ -363,8 +363,11 @@ def main():
     print(f"class weights: Non-cracked={cw[0]:.3f}  Cracked={cw[1]:.3f}  (train prevalence {n_pos / len(tr_df):.3f})")
     exit_w = [1.0 if n == "final" else args.aux_weight for n in exit_names]
     bank = MinorityBank(args.smote_bank) if args.imbalance == "smote" else None
-    print(f"batch augmentation: cutmix_alpha={args.cutmix_alpha} mixup_alpha={args.mixup_alpha} "
-          f"(prob {args.mixup_prob}, cutmix share {args.mixup_switch_prob}) | imbalance={args.imbalance}"
+    both = args.cutmix_alpha > 0 and args.mixup_alpha > 0
+    print(f"batch augmentation: cutmix_alpha={args.cutmix_alpha} mixup_alpha={args.mixup_alpha}"
+          + (f" | {args.mixup_prob:.0%} of batches mixed" if (args.cutmix_alpha > 0 or args.mixup_alpha > 0) else " (no mixing)")
+          + (f", cutmix share {args.mixup_switch_prob}" if both else "")
+          + f" | imbalance={args.imbalance}"
           + (f" (target {args.smote_target:.0%} cracked per batch)" if bank else ""))
 
     # ---- optim ---------------------------------------------------------------
