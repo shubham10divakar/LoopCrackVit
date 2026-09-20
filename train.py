@@ -102,6 +102,13 @@ def seed_all(s):
     random.seed(s); np.random.seed(s); torch.manual_seed(s); torch.cuda.manual_seed_all(s)
 
 
+def eta(history, total, epoch):
+    """Remaining time from the mean of the last 3 epoch durations (upper bound; early stopping may end sooner)."""
+    secs = [h["sec"] for h in history[-3:]]
+    left = (total - epoch) * (sum(secs) / len(secs))
+    return f"{int(left // 3600)}h{int(left % 3600 // 60):02d}m"
+
+
 # ------------------------------------------------------------------ early stopping
 class EarlyStopping:
     """Stops when `monitor` has not improved by > min_delta for `patience` epochs."""
@@ -298,7 +305,8 @@ def main():
     model = model.to(device)
     exit_names, exit_cost = model.exit_names, model.exit_cost
     name = run_name(args)
-    print(f">>> RUN {name}\n    {model.param_report()}\n    block applications per exit: {exit_cost}")
+    print(f">>> RUN {name}")
+    print(model.summary())
     if args.summary_only:
         return
 
@@ -387,11 +395,11 @@ def main():
                 scaler.step(opt); scaler.update(); opt.zero_grad(set_to_none=True); step += 1
             loss_sum += loss.item() * y.size(0)
             correct += ((outs[-1] > 0).float() == y).sum().item(); n += y.size(0)
-            pbar.set_postfix(loss=f"{loss_sum / n:.4f}", acc=f"{correct / n:.4f}", lr=f"{lr:.1e}")
+            pbar.set_postfix(loss=f"{loss_sum / n:.4f}", acc=f"{correct / n:.4f}", lr=f"{lr:.1e}", gpu=f"{torch.cuda.max_memory_allocated() / 2**30:.1f}G" if device.type == "cuda" else "cpu")
         pbar.close()
 
         # ---- validate (every exit) ----
-        yv, pv, vloss = predict(model, val_loader, device, amp_dtype, use_amp)
+        yv, pv, vloss = predict(model, val_loader, device, amp_dtype, use_amp, f"  val {epoch}")
         mv = M.compute_all(yv, pv["final"])
         row = dict(epoch=epoch, lr=lr, train_loss=loss_sum / n, train_acc=correct / n, val_loss=vloss,
                    **{f"val_{k}": mv[k] for k in ("acc", "bal_acc", "auc", "ap", "f1", "f2", "precision", "recall", "mcc")})
@@ -420,7 +428,7 @@ def main():
         print(f"epoch {epoch:3d}/{args.epochs} | lr {lr:.2e} | train loss {row['train_loss']:.4f} acc {row['train_acc']:.4f}"
               f" | val loss {vloss:.4f} auc {mv['auc']:.4f} ap {mv['ap']:.4f} f1 {mv['f1']:.4f}"
               f" rec {mv['recall']:.4f} prec {mv['precision']:.4f} mcc {mv['mcc']:.4f} {ex}"
-              f" | {row['sec']:.0f}s{'  * best' if improved else f'  (no improv {es.bad}/{args.early_stop_patience or "-"})'}")
+              f" | {row['sec']:.0f}s | ETA {eta(history, args.epochs, epoch)} | best {args.monitor} {es.best_value:.4f}{'  * best' if improved else f'  (no improv {es.bad}/{args.early_stop_patience or "-"})'}")
         if stop:
             stopped_early = True
             print(f"[early stopping] {args.monitor} did not improve for {es.bad} epochs "

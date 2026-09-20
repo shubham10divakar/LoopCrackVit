@@ -399,6 +399,31 @@ class LoopedCrackViT(nn.Module):
         self.reg_loss = torch.stack(sink).sum() if sink else None
         return outs
 
+
+    def summary(self):
+        """Per-component parameter table + how the looped stack unrolls."""
+        c = self.cfg
+        cnt = lambda mod: sum(p.numel() for p in mod.parameters())
+        rows = [("tokeniser", cnt(self.tokeniser)), ("cls_pos", cnt(self.cls_pos))]
+        rows += [(f"prelude.{i}  (untied)", cnt(b)) for i, b in enumerate(self.prelude)]
+        rows += [(f"core.{i}  (shared x{c.n_passes})", cnt(b)) for i, b in enumerate(self.core)]
+        rows += [(f"coda.{i}  (untied)", cnt(b)) for i, b in enumerate(self.coda)]
+        if self.pass_emb is not None:
+            rows.append(("pass_embed", cnt(self.pass_emb)))
+        if self.inject is not None:
+            rows.append(("input_injection", cnt(self.inject)))
+        rows.append((f"head ({c.head_type}, {c.num_classes} out)", cnt(self.head)))
+        total = sum(p.numel() for p in self.parameters())
+        unroll = " -> ".join([f"prelude x{c.n_prelude}"] * (c.n_prelude > 0)
+                             + [f"[core x{c.n_core}] x{c.n_passes}"] + [f"coda x{c.n_coda}"] * (c.n_coda > 0) + ["head"])
+        lines = ["-" * 62, f"{c.attention} | dim {c.dim} | heads {c.num_heads} | {c.stem} stem | {c.image_size}px", unroll, "-" * 62]
+        lines += [f"  {n:<34s}{v:>14,}" for n, v in rows]
+        lines += ["-" * 62, f"  {'TOTAL parameters':<34s}{total:>14,}",
+                  f"  {'unique blocks / applications':<34s}{self.n_unique_blocks:>6} / {self.exit_cost['final']:<6}",
+                  f"  {'exits (block apps)':<34s}{str(self.exit_cost):>28}",
+                  f"  {'untied-equivalent parameters':<34s}{self.param_report()['untied_equivalent_params']:>14,}", "-" * 62]
+        return chr(10).join(lines)
+
     # diagnostics -------------------------------------------------------------
     @torch.no_grad()
     def gate_report(self):

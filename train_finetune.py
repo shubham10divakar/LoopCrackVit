@@ -41,7 +41,7 @@ from sklearn.metrics import classification_report, confusion_matrix
 import metrics as M
 from data import build_folder_loaders
 from model import CrackViTConfig, LoopedCrackViT
-from train import (EarlyStopping, complexity, cosine_lr, get_args, param_groups, pick_device, seed_all, tqdm)
+from train import (EarlyStopping, eta, complexity, cosine_lr, get_args, param_groups, pick_device, seed_all, tqdm)
 
 
 # ------------------------------------------------------------------ mixup / cutmix
@@ -111,7 +111,7 @@ def main():
     torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = True
     torch.backends.cudnn.benchmark = True
 
-    dataset = os.path.basename(os.path.normpath(args.dataset_dir or args.train_dir))
+    dataset = os.path.basename(os.path.normpath(args.dataset_dir or args.train_dir or "summary"))
     init = f"ft-{args.init_strategy}" if args.backbone else "scratch"
     name = (f"{args.attention.lower()}_{args.n_prelude}-{args.n_core}x{args.n_passes}-{args.n_coda}"
             f"_{init}_r{args.image_size}_s{args.seed}")
@@ -137,7 +137,8 @@ def main():
         load_pretrained(model, args.backbone, args.init_strategy)
     model = model.to(device)
     exit_names, exit_cost = model.exit_names, model.exit_cost
-    print(f">>> {dataset} / {name}\n    {model.param_report()}\n    block applications per exit: {exit_cost}")
+    print(f">>> {dataset} / {name}")
+    print(model.summary())
     if args.summary_only:
         return
 
@@ -203,10 +204,10 @@ def main():
                 scaler.step(opt); scaler.update(); opt.zero_grad(set_to_none=True); step += 1
             loss_sum += loss.item() * y.size(0); n += y.size(0)
             correct += (outs[-1].argmax(-1) == y).sum().item()     # vs. original labels (approx. under mixup)
-            pbar.set_postfix(loss=f"{loss_sum / n:.3f}", lr=f"{lr:.1e}")
+            pbar.set_postfix(loss=f"{loss_sum / n:.3f}", acc=f"{correct / n:.3f}", lr=f"{lr:.1e}", gpu=f"{torch.cuda.max_memory_allocated() / 2**30:.1f}G" if device.type == "cuda" else "cpu")
         pbar.close()
 
-        yv, pv, vloss = predict(model, val_loader, device, amp_dtype, use_amp)
+        yv, pv, vloss = predict(model, val_loader, device, amp_dtype, use_amp, f"  val {epoch}")
         mv = M.compute_multiclass(yv, pv["final"])
         row = dict(epoch=epoch, lr=lr, train_loss=loss_sum / n, train_acc=correct / n, val_loss=vloss,
                    val_acc=mv["acc"], val_top5=mv["top5"], val_f1_macro=mv["f1_macro"], val_bal_acc=mv["bal_acc"],
@@ -231,7 +232,7 @@ def main():
 
         ex = " ".join(f"{e}:{row[f'val_acc_{e}']:.4f}" for e in exit_names[:-1])
         print(f"epoch {epoch:3d}/{args.epochs} | lr {lr:.2e} | train loss {row['train_loss']:.4f} | val loss {vloss:.4f} "
-              f"acc {mv['acc']:.4f} top5 {mv['top5']:.4f} f1m {mv['f1_macro']:.4f} {ex} | {row['sec']:.0f}s"
+              f"acc {mv['acc']:.4f} top5 {mv['top5']:.4f} f1m {mv['f1_macro']:.4f} {ex} | {row['sec']:.0f}s | ETA {eta(history, args.epochs, epoch)} | best {args.monitor} {es.best_value if improved is False else row[args.monitor]:.4f}"
               f"{'  * best' if improved else f'  (no improv {es.bad}/{args.early_stop_patience or "-"})'}")
         if stop:
             stopped_early = True
