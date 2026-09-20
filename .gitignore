@@ -1,0 +1,19 @@
+# data (large; re-create with downloads.py / the SDNET download)
+Structural Defects Network (SDNET) 2018 archive/
+Structural Defects Network (SDNET) 2018 archive.zip
+datasets/
+
+# training outputs and checkpoints
+runs/
+runs_ft/
+runs_bench/
+runs_debug/
+*.pt
+*.pth
+*.ckpt
+*.weights.h5
+
+# python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/

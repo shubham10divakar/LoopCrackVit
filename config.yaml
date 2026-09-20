@@ -1,0 +1,80 @@
+# Looped CrackViT + GIPA on SDNET2018 - edit here, or override any key on the command line
+# (e.g. --attention MHSA --n-core 3). Keys use underscores; CLI flags use dashes.
+
+# ---------------- data ----------------
+data_root: "D:/D/my docs/my docs/ideas/attention based works/Ai in civil engineering/Concrete Crack Classification/code repo/Structural Defects Network (SDNET) 2018 archive"
+split_mode: group              # group (no source-photo leakage) | random (== Kaggle notebook)
+val_frac: 0.15
+test_frac: 0.15
+augment: true
+num_workers: 4
+
+# ---------------- model ----------------
+image_size: 224
+stem: conv                     # conv | patch
+patch_size: 16
+dim: 256
+num_heads: 8
+mlp_ratio: 2.0
+dropout: 0.1
+attention: GIPA_FULL           # MHSA | GIPA_S | GIPA_G | GIPA_I | GIPA_GI | GIPA_FULL
+coherence_reg: 0.0             # orientation-smoothness penalty (try 1e-3)
+qkv_bias: false                # true for pretrained ViT init
+patch_norm: true               # false for pretrained ViT init (DeiT has no norm after patchify)
+head_type: mlp                 # mlp | linear (linear = LN -> Linear, like DeiT)
+drop_path: 0.0                 # stochastic depth (0.1 for fine-tuning)
+
+# ---------------- pretrained init (see config_sdnet_finetune.yaml) ----------------
+backbone: null                 # timm name, e.g. deit_small_patch16_224; null = train from scratch
+init_strategy: avg             # avg | pick  (how 12 source layers collapse into the unique blocks)
+layer_decay: 1.0               # <1 = layer-wise LR decay (0.75 typical for fine-tuning)
+norm: auto                     # auto (imagenet if backbone else half) | half | imagenet
+
+# ---------------- looping ----------------
+# STACK    : n_prelude 0, n_core 6, n_coda 0, n_passes 2
+# SANDWICH : n_prelude 1, n_core 4, n_coda 1, n_passes 2
+# UNTIED   : n_prelude 0, n_core 6, n_coda 0, n_passes 1   (baseline, same batch size!)
+n_prelude: 0
+n_core: 6
+n_coda: 0
+n_passes: 2
+pass_embed: true
+per_pass_gates: true
+input_injection: false
+aux_weight: 0.3                # loss weight on early exits; final exit = 1.0
+
+# ---------------- training ----------------
+epochs: 60
+batch_size: 16
+grad_accum: 1                  # effective batch = batch_size * grad_accum
+lr: 0.0003
+min_lr: 0.000001
+weight_decay: 0.01
+warmup_epochs: 2               # cosine only
+scheduler: cosine              # cosine | plateau (ReduceLROnPlateau on val_loss, as in the notebook)
+plateau_patience: 4
+plateau_factor: 0.5
+label_smoothing: 0.05
+class_weights: true            # balanced weights on the loss (Cracked is ~15% of images)
+grad_clip: 1.0
+amp: true
+seed: 42
+device: auto
+output_dir: runs
+
+# ---------------- early stopping ----------------
+# monitor is computed on the FINAL exit of the validation set:
+#   val_auc | val_ap | val_f1 | val_f2 | val_mcc | val_bal_acc | val_recall | val_loss
+monitor: val_auc
+early_stop_patience: 10        # null = never stop early
+early_stop_min_delta: 0.0005
+restore_best: true             # final evaluation always uses best.pt
+
+# ---------------- evaluation ----------------
+threshold_beta: 1.0            # val-tuned threshold maximises F-beta (2.0 favours recall)
+target_recall: 0.95            # also report the threshold that reaches this crack recall
+bootstrap: 1000                # bootstrap resamples for 95% CIs (0 = skip)
+save_every: 0                  # numbered checkpoints every N epochs (0 = only best/last)
+resume: null
+summary_only: false
+debug_subset: 0                # >0: use only N images per split (pipeline smoke test)

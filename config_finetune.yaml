@@ -1,0 +1,75 @@
+# Looped CrackViT - FINE-TUNING on multi-class benchmarks (CUB-200, FGVC-Aircraft, Flowers-102, Food-101 ...)
+# Used by train_finetune.py. Override any key on the CLI:  --dataset-dir datasets/cub200 --seed 1
+# The baselines (plain ViT, shallow ViT, looped MHSA) use the SAME file - only the model flags change.
+
+# ---------------- data ----------------
+dataset_dir: null              # datasets/<name> prepared by downloads.py  (train/ [+ test/])
+train_dir: null
+test_dir: null
+class_subset: null             # use only the first N classes (quick tests)
+max_per_class: null
+val_split: 0.1                 # held out of train, used for early stopping / model selection
+test_split: 0.2                # only when the dataset has no official test/ folder
+augment: rand                  # none | basic | rand (RandAugment) | trivial
+norm: imagenet
+num_workers: 4
+
+# ---------------- model: must match DeiT-S (dim 384, 6 heads, mlp 4, patch 16) ----------------
+image_size: 224                # 384/448 are common for FGVC; state it and run ALL baselines at the same size
+stem: patch
+patch_size: 16
+dim: 384
+num_heads: 6
+mlp_ratio: 4.0
+dropout: 0.0
+attention: GIPA_FULL           # MHSA | GIPA_S | GIPA_G | GIPA_I | GIPA_GI | GIPA_FULL
+coherence_reg: 0.0
+qkv_bias: true
+patch_norm: false
+head_type: linear
+drop_path: 0.1
+
+# ---------------- looping ----------------
+n_prelude: 0
+n_core: 6
+n_coda: 0
+n_passes: 2                    # try 3 or 4 for an accuracy-vs-loops curve (per-exit accuracy is reported)
+pass_embed: true
+per_pass_gates: true
+input_injection: false
+aux_weight: 0.3
+
+# ---------------- pretrained init ----------------
+backbone: deit_small_patch16_224     # null = from scratch
+init_strategy: avg                   # avg (layers averaged) | pick (evenly spaced layers)
+layer_decay: 0.65
+
+# ---------------- training ----------------
+epochs: 50
+batch_size: 32
+grad_accum: 2                  # effective batch 64; use 16 x 4 if it OOMs (GIPA keeps 197x197 fp32 maps)
+lr: 0.0001
+min_lr: 0.000001
+weight_decay: 0.05
+warmup_epochs: 5
+label_smoothing: 0.1
+grad_clip: 1.0
+amp: true
+seed: 42
+device: auto
+output_dir: runs_bench
+
+mixup_alpha: 0.8
+cutmix_alpha: 1.0
+mixup_prob: 1.0
+mixup_switch_prob: 0.5
+
+# ---------------- early stopping (on the held-out val split, final exit) ----------------
+monitor: val_acc               # val_acc | val_top5 | val_f1_macro | val_bal_acc | val_loss
+early_stop_patience: 15
+early_stop_min_delta: 0.0
+
+bootstrap: 1000
+save_every: 0
+resume: null
+summary_only: false
