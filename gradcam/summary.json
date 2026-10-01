@@ -1,0 +1,39 @@
+{
+  "checkpoint": "runs/gipa_full_0-6x2-0_conv_bs16_random_smote_s42\\best.pt",
+  "epoch": 46,
+  "threshold_val_bestF1": 0.5591167211532593,
+  "test_auc_final": 0.9332282767013804,
+  "test_auc_exit1": 0.9329809356997053,
+  "test_counts": {
+    "TN": 6889,
+    "TP": 917,
+    "FN": 355,
+    "FP": 253
+  },
+  "faithfulness": [
+    {
+      "map": "Grad-CAM pass 2 (final)",
+      "deletion_auc(lower=better)": 0.5321060840040446,
+      "insertion_auc(higher=better)": 0.7074821162968875,
+      "n_images": 200
+    },
+    {
+      "map": "Grad-CAM pass 1",
+      "deletion_auc(lower=better)": 0.47037586010992527,
+      "insertion_auc(higher=better)": 0.7417179692536593,
+      "n_images": 200
+    },
+    {
+      "map": "Grad-CAM conv stem",
+      "deletion_auc(lower=better)": 0.47193717844784266,
+      "insertion_auc(higher=better)": 0.7121848959475755,
+      "n_images": 200
+    },
+    {
+      "map": "random map",
+      "deletion_auc(lower=better)": 0.6585970658808946,
+      "insertion_auc(higher=better)": 0.6463500428944827,
+      "n_images": 200
+    }
+  ]
+}
