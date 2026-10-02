@@ -22,7 +22,9 @@ import json
 import math
 import os
 import random
+import sys
 import time
+import traceback
 from dataclasses import fields
 
 import matplotlib
@@ -49,6 +51,33 @@ from paper import write_report
 from model import CrackViTConfig, LoopedCrackViT
 
 MINIMISE = {"val_loss"}
+
+
+class ConsoleLog:
+    """Copies everything printed to stdout into <run>/train_log.txt (appending, so resumed runs keep the
+    earlier part). Output printed before the run folder exists is buffered and written on attach().
+    Progress bars go to stderr and are not logged."""
+
+    def __init__(self):
+        self.term, self.buf, self.file = sys.stdout, [], None
+        sys.stdout = self
+
+    def attach(self, path):
+        self.file = open(path, "a", encoding="utf8")
+        self.file.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} | python {' '.join(sys.argv)}\n"
+                        + "".join(self.buf))
+        self.buf = None
+        self.file.flush()
+
+    def write(self, s):
+        self.term.write(s)
+        if self.file:
+            self.file.write(s); self.file.flush()
+        elif self.buf is not None:
+            self.buf.append(s)
+
+    def flush(self):
+        self.term.flush()
 
 
 # ------------------------------------------------------------------ args
@@ -345,6 +374,8 @@ def main():
 
     out = os.path.join(args.output_dir, name)
     os.makedirs(out, exist_ok=True)
+    if isinstance(sys.stdout, ConsoleLog):
+        sys.stdout.attach(os.path.join(out, "train_log.txt"))
     with open(os.path.join(out, "config.json"), "w") as f:
         json.dump({"args": vars(args), "model": mcfg.to_dict()}, f, indent=2)
 
@@ -586,4 +617,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    log = ConsoleLog()
+    try:
+        main()
+    except BaseException:           # crashes and Ctrl+C end up in the log too
+        if log.file:
+            log.file.write(traceback.format_exc())
+        raise

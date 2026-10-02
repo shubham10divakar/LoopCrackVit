@@ -36,6 +36,8 @@ python train.py --split-mode balanced --scheduler plateau --weight-decay 0 --gra
 ```
 
 Repeat with `--seed 43` and `--seed 44`. Each run writes `runs/gipa_full_0-6x2-0_conv_bs16_balanced_s<seed>/`.
+Everything printed to the console (data summary, per-epoch lines, test tables, errors) is also saved to
+`<run>/train_log.txt`; a resumed run appends to it.
 The classes are already 50/50, so leave `--imbalance` off.
 
 ### 2. Paper outputs (written automatically at the end of training)
