@@ -33,6 +33,7 @@ Detailed guides: **[docs/SDNET.md](docs/SDNET.md)** (crack problem: data, metric
 | `augment.py` | batch-level CutMix, MixUp and SMOTE-style minority synthesis for the SDNET trainer |
 | `train.py` | **SDNET2018** training / fine-tuning + full evaluation |
 | `train_finetune.py` | **multi-class benchmarks** training / fine-tuning + full evaluation |
+| `evaluate.py` | re-scores a saved SDNET run on the test split → paper metrics table with bootstrap CIs |
 | `downloads.py` | downloads and prepares CUB-200, Aircraft, Flowers-102, Food-101, CIFAR-100, PlantDoc, … |
 | `run_sweep.py` | datasets × variants × seeds runner (resumable) |
 | `aggregate.py` | mean ± std over seeds → CSV / markdown tables |
@@ -184,6 +185,27 @@ python train.py --config config_sdnet_finetune.yaml --resume runs_ft/gipa_full_0
   (an estimate from parameter count, not measured), i.e. a few GB per 50-epoch run. Use `--save-every 5` (or 0)
   to save less.
 * Not restored: the random-number state, so a resumed run is not bit-identical to an uninterrupted one.
+
+### Evaluate a saved run (SDNET)
+
+If training stopped before the final test evaluation (no `results.json` in the run folder), or you want to score
+another checkpoint, `evaluate.py` rebuilds the model from `config.json`, reuses the cached split in `runs/_splits`,
+tunes thresholds on VAL only and scores TEST:
+
+```powershell
+python evaluate.py --run runs/gipa_full_0-6x2-0_conv_bs16_random_smote_s42
+
+# another checkpoint / on the CPU while the GPU is busy / skip the bootstrap CIs
+python evaluate.py --run runs/gipa_full_0-6x2-0_conv_bs16_random_smote_s42 --ckpt epoch_0051.pt
+python evaluate.py --run runs/gipa_full_0-6x2-0_conv_bs16_random_smote_s42 --device cpu
+python evaluate.py --run runs/gipa_full_0-6x2-0_conv_bs16_random_smote_s42 --bootstrap 0
+```
+
+Writes to `<run>/eval/`: `metrics_table.md` / `.csv` (ROC-AUC, PR-AUC, crack recall and precision, specificity,
+MCC, Brier score, ECE, parameters (M), block applications at the final exit; threshold-dependent metrics at 0.5 and
+at the val-tuned F1 threshold, each with a 95% stratified-bootstrap CI), `operating_points.csv`, `per_exit.csv`,
+`test_predictions.csv` and `metrics.json`. Inference runs in fp32 unless you pass `--amp`. Predictions are cached in
+`eval/_preds_<ckpt>.npz`; pass `--no-cache` to recompute them.
 
 ---
 
