@@ -8,7 +8,10 @@ A random patch-level split therefore leaks near-identical neighbouring patches b
 train and test. split_mode:
     group   (default) - all patches of one source photo stay in the same split
     random            - patch-level split, identical in spirit to the Kaggle notebook
-Both are stratified on surface x label. The split is cached to a CSV so every run of the
+    balanced          - CrackNeXt protocol: per surface, undersample Non-cracked to the Cracked count
+                        (~17k images, 50/50), then the patch-level random split. A separate
+                        benchmark, not comparable to metrics on the full imbalanced set.
+All are stratified on surface x label. The split is cached to a CSV so every run of the
 same seed/mode sees exactly the same images.
 """
 from __future__ import annotations
@@ -46,7 +49,19 @@ def scan_sdnet(root):
     return df
 
 
+def undersample(df, seed=42):
+    """Within each surface, randomly keep as many Non-cracked images as there are Cracked ones
+    (the CrackNeXt SDNET2018 protocol). Balancing happens BEFORE the train/val/test split."""
+    keep = []
+    for _, g in df.groupby("surface"):
+        pos, neg = g[g["label"] == 1], g[g["label"] == 0]
+        keep += [pos, neg.sample(n=min(len(pos), len(neg)), random_state=seed)]
+    return pd.concat(keep).sort_values("path").reset_index(drop=True)
+
+
 def make_split(df, mode="group", seed=42, val_frac=0.15, test_frac=0.15):
+    if mode == "balanced":      # per-surface undersampling to 50/50, then the patch-level random split
+        return make_split(undersample(df, seed), "random", seed, val_frac, test_frac)
     if mode == "random":
         tr, tmp = train_test_split(df, test_size=val_frac + test_frac, random_state=seed,
                                    stratify=df["strat"])
@@ -58,7 +73,7 @@ def make_split(df, mode="group", seed=42, val_frac=0.15, test_frac=0.15):
         out.loc[te.index, "split"] = "test"
         return out
     if mode != "group":
-        raise ValueError("split_mode must be 'group' or 'random'")
+        raise ValueError("split_mode must be 'group', 'random' or 'balanced'")
     k = int(round(1 / min(val_frac, test_frac)))          # 15% -> ~7 folds
     folds = np.full(len(df), -1)
     sgkf = StratifiedGroupKFold(n_splits=k, shuffle=True, random_state=seed)
@@ -143,6 +158,36 @@ def describe_split(df):
     t = df.groupby(["split", "surface", "label"]).size().unstack(fill_value=0)
     t.columns = ["Non-cracked", "Cracked"]
     return t
+
+
+def data_summary(df, mode, root=None):
+    """Printable dataset report: per split x surface counts with totals and crack prevalence.
+    For split_mode 'balanced' it also shows the original folder counts and what undersampling dropped."""
+    def table(d, by):
+        t = d.groupby(by + ["label"]).size().unstack(fill_value=0).reindex(columns=[0, 1], fill_value=0)
+        t.columns = ["Non-cracked", "Cracked"]
+        t["Total"] = t.sum(1)
+        t["Cracked %"] = (100 * t["Cracked"] / t["Total"]).round(1)
+        return t
+
+    order = ["train", "val", "test"]
+    lines = [f"=== DATA  split_mode={mode} ===", "per split x surface:",
+             table(df, ["split", "surface"]).reindex(order, level=0).to_string(), "", "per split:"]
+    per = table(df, ["split"]).reindex(order)
+    per["% of data"] = (100 * per["Total"] / len(df)).round(1)
+    lines += [per.to_string(), "",
+              f"TOTAL {len(df):,} images: {int((df.label == 0).sum()):,} Non-cracked + "
+              f"{int(df.label.sum()):,} Cracked ({100 * df.label.mean():.1f}% cracked)"]
+    if mode == "balanced" and root:
+        full = scan_sdnet(root)
+        orig, kept = table(full, ["surface"]), table(df, ["surface"])
+        cmp = orig[["Non-cracked", "Cracked", "Total"]].add_prefix("orig ").join(kept[["Non-cracked", "Cracked", "Total"]].add_prefix("kept "))
+        cmp["dropped Non-cracked"] = cmp["orig Non-cracked"] - cmp["kept Non-cracked"]
+        lines += ["", "undersampling (per surface, Non-cracked cut to the Cracked count, before splitting):",
+                  cmp.to_string(),
+                  f"kept {len(df):,} of {len(full):,} images ({100 * len(df) / len(full):.1f}%); "
+                  f"dropped {len(full) - len(df):,} Non-cracked"]
+    return "\n".join(lines)
 
 
 # =============================================================================

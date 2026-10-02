@@ -44,7 +44,8 @@ except ImportError:
 
 import metrics as M
 from augment import MinorityBank, mix_batch, smote_batch
-from data import CLASS_NAMES, build_loaders, describe_split, load_split
+from data import CLASS_NAMES, build_loaders, data_summary, load_split
+from paper import write_report
 from model import CrackViTConfig, LoopedCrackViT
 
 MINIMISE = {"val_loss"}
@@ -351,7 +352,7 @@ def main():
     df = load_split(args.data_root, args.split_mode, args.seed, os.path.join(args.output_dir, "_splits"))
     if args.debug_subset:       # quick pipeline test: N images per split (both classes kept)
         df = df.groupby(["split", "label"], group_keys=False).head(args.debug_subset // 2)
-    print(f"\nsplit_mode={args.split_mode}\n{describe_split(df)}")
+    print("\n" + data_summary(df, args.split_mode, args.data_root))
     train_loader, val_loader, test_loader, (tr_df, va_df, te_df) = build_loaders(
         df, args.image_size, args.batch_size, args.num_workers, args.augment,
         pin_memory=device.type == "cuda", seed=args.seed, oversample=args.imbalance == "oversample",
@@ -361,6 +362,8 @@ def main():
     cw = torch.tensor([len(tr_df) / (2 * n_neg), len(tr_df) / (2 * n_pos)] if args.class_weights else [1., 1.],
                       device=device)
     print(f"class weights: Non-cracked={cw[0]:.3f}  Cracked={cw[1]:.3f}  (train prevalence {n_pos / len(tr_df):.3f})")
+    print(f"loaders: train {len(train_loader)} batches x {args.batch_size} (drop_last, {len(tr_df) % args.batch_size} "
+          f"images skipped per epoch) | val {len(val_loader)} x {args.batch_size * 2} | test {len(test_loader)} x {args.batch_size * 2}")
     exit_w = [1.0 if n == "final" else args.aux_weight for n in exit_names]
     bank = MinorityBank(args.smote_bank) if args.imbalance == "smote" else None
     both = args.cutmix_alpha > 0 and args.mixup_alpha > 0
@@ -559,6 +562,8 @@ def main():
     for e in exit_names:
         pred[f"p_{e}"] = pt[e]
     pred.to_csv(f"{out}/test_predictions.csv", index=False)
+    write_report(out, name, yv, pf_v, yt, pf_t, model.param_report()["total_params"], exit_cost["final"],
+                 history, "best.pt", ck.get("epoch"))
 
     res = dict(run=name, attention=args.attention, split_mode=args.split_mode, n_prelude=args.n_prelude,
                n_core=args.n_core, n_coda=args.n_coda, n_passes=args.n_passes,

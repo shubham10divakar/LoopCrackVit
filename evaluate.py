@@ -14,6 +14,8 @@ Writes to <run>/eval/:
     per_exit.csv              exit1 vs final
     test_predictions.csv      P(Cracked) per test image and exit
     metrics.json              everything above in one file
+It also writes the paper table and figures (paper.py) to <run>/paper/, or <run>/paper_<ckpt>/ for
+a checkpoint other than best.pt, e.g.  python evaluate.py --run runs/<run> --ckpt last.pt
 Predictions are cached in <run>/eval/_preds_<ckpt>.npz (delete it, or pass --no-cache, to recompute).
 """
 from __future__ import annotations
@@ -36,6 +38,7 @@ except ImportError:
 import metrics as M
 from data import CrackDataset, build_transforms, load_split
 from model import CrackViTConfig, LoopedCrackViT
+from paper import write_report
 
 # (table label, key in metrics.compute_all, format)
 TABLE = [("ROC-AUC", "auc", ".4f"), ("PR-AUC (average precision)", "ap", ".4f"),
@@ -168,6 +171,10 @@ def main():
     print("\n" + "\n".join(md[2:]))
     print("per exit (val-F1 threshold):\n" + exit_df.to_string(index=False, float_format=lambda v: f"{v:.4f}"))
     print(f"\nall outputs -> {out}")
+    hist_path = os.path.join(run, "history.json")
+    write_report(run, os.path.basename(run), yv, pv["final"], yt, pt["final"], params["total_params"],
+                 exit_cost["final"], json.load(open(hist_path)) if os.path.exists(hist_path) else None,
+                 args.ckpt, ck.get("epoch"))
 
 
 if __name__ == "__main__":

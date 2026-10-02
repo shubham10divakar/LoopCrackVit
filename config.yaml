@@ -3,7 +3,7 @@
 
 # ---------------- data ----------------
 data_root: "D:/D/my docs/my docs/ideas/attention based works/Ai in civil engineering/Concrete Crack Classification/code repo/Structural Defects Network (SDNET) 2018 archive"
-split_mode: group              # group (no source-photo leakage) | random (== Kaggle notebook)
+split_mode: group              # group (no source-photo leakage) | random (== Kaggle notebook) | balanced (CrackNeXt: undersampled 50/50)
 val_frac: 0.15
 test_frac: 0.15
 augment: true
